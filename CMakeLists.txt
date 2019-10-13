@@ -5,7 +5,6 @@ file(GLOB TORCH_SPARSE_SRCS
 )
 set(TORCH_SPARSE_SRCS
 	${TORCH_SPARSE_SRCS}
-	${CMAKE_CURRENT_SOURCE_DIR}/blocksparse/src/gpu_types.cc
 )
 
 file(GLOB TORCH_SPARSE_CUDA_SRCS
@@ -13,14 +12,6 @@ file(GLOB TORCH_SPARSE_CUDA_SRCS
 )
 set(TORCH_SPARSE_CUDA_SRCS
   ${TORCH_SPARSE_CUDA_SRCS}
-  ${CMAKE_CURRENT_SOURCE_DIR}/blocksparse/src/blocksparse_matmul_op_gpu.cu
-  ${CMAKE_CURRENT_SOURCE_DIR}/blocksparse/src/blocksparse_hgemm_cn_64_op_gpu.cu
-  ${CMAKE_CURRENT_SOURCE_DIR}/blocksparse/src/blocksparse_hgemm_cn_128_op_gpu.cu
-  ${CMAKE_CURRENT_SOURCE_DIR}/blocksparse/src/blocksparse_hgemm_nc_op_gpu.cu
-)
-
-file(GLOB OPEN_AI_KERNELS
-	${CMAKE_CURRENT_SOURCE_DIR}/blocksparse/src/blocksparse_kernels.cc
 )
 
 set(CMAKE_CXX_STANDARD 11)
