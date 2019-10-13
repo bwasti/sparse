@@ -145,9 +145,6 @@ class BSMM(Function):
             num_fsegs_t.item(), max_fseg_t.item(),
             num_bsegs_t.item(), max_bseg_t.item()
         )
-        #dX = torch.ops.sparse.bsmm_dx(dY, W, X.shape[1], blut,
-        #    block_size_t.item(), num_bsegs_t.item(), max_bseg_t.item())
-        #dW = torch.ops.sparse.bsmm_dw(X, dY, ulut, block_size_t.item())
         return dX, dW, None, None, None, None, None, None, None, None, None, None
 
 class BSMM_out(Function):
@@ -172,11 +169,6 @@ class BSMM_out(Function):
 						X, ddW, flut, blut, ulut, dY.shape[1], block_size_t.item(),
             num_fsegs_t.item(), max_fseg_t.item(), num_bsegs_t.item(), max_bseg_t.item(), True
             )
-
-        #dXT = torch.ops.sparse.bsmm_dx(dY, ddW, X.shape[1],
-        #    blut, block_size_t.item(), num_bsegs_t.item(), max_bseg_t.item()).t()
-        #ddY = torch.ops.sparse.bsmm(X, ddW, dY.shape[1],
-        #    flut, blocks_size_t.item(), num_fsegs_t.item(), max_fseg_t.item())
         return dXT, ddY, None, None, None, None, None, None, None, None, None
 
 class BlockSparseTensor:
@@ -225,11 +217,13 @@ class BlockSparseTensor:
     # backprop/update (dW) lookup table
     self.ulut = torch.tensor(updat_lut, dtype=torch.int32, device=device)
 
+bsmm = BSMM()
+bsmm_out = BSMM_out()
 def mm(X, W : BlockSparseTensor):
-  return BSMM().apply(X, W.data, W.flut, W.blut, W.ulut, W.shape[1], W.block_size,
+  return bsmm.apply(X, W.data, W.flut, W.blut, W.ulut, W.shape[1], W.block_size,
                       W.num_fsegs, W.max_fseg, W.num_bsegs, W.max_bseg, False)
 
 def mm_out(X, Y, W : BlockSparseTensor):
-  W.data = BSMM_out().apply(X.t(), Y, W.ulut, W.flut, W.blut, W.block_size,
+  W.data = bsmm_out.apply(X.t(), Y, W.ulut, W.flut, W.blut, W.block_size,
                       W.num_fsegs, W.max_fseg, W.num_bsegs, W.max_bseg)
   return W
