@@ -36,6 +36,13 @@ cuda = torch.device("cuda")
 
 
 class TestBlockSparseTensor(unittest.TestCase):
+    def test_ident(self):
+        X = torch.randn(128,128, device=cuda)
+        W = torch.eye(128, device=cuda)
+        bs_W = ts.BlockSparseTensor(W, torch.ones(8,8))
+        Y = ts.mm(X, bs_W)
+        torch.testing.assert_allclose(X, Y)
+
     @sweep(mb=[32, 64, 128], i=[32, 64, 128], o=[32, 64, 128], block_size=[4, 8, 16])
     def test_fwd(self, mb, i, o, block_size):
         X, masked_W, bs_W = get_rand_vals(mb, i, o, block_size)

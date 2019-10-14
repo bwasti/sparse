@@ -37,7 +37,9 @@ set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS}
 message("TORCH SPARSE CUDA IS ${TORCH_SPARSE_CUDA_SRCS}")
 message("TORCH SPARSE IS ${TORCH_SPARSE_SRCS}")
 cuda_add_library(torch_sparse_cuda SHARED ${TORCH_SPARSE_CUDA_SRCS})
-
+target_include_directories(torch_sparse_cuda PUBLIC
+    ${PYTORCH_DIR}/include
+)
 
 # PYTORCH_DIR
 IF(DEFINED ENV{PYTORCH_DIR})

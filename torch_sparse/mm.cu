@@ -1,5 +1,24 @@
 #include <stdio.h>
+#include "c10/cuda/CUDAStream.h"
 #include "mm.h"
+
+#ifdef DEBUG
+#define gpuErrchk(ans) \
+  { gpuAssert((ans), __FILE__, __LINE__); }
+inline void gpuAssert(cudaError_t code, const char* file, int line,
+                      bool abort = true) {
+  if (code != cudaSuccess) {
+    fprintf(stderr, "GPUassert: %s %s %d\n", cudaGetErrorString(code), file,
+            line);
+    if (abort) exit(code);
+  }
+}
+
+#else
+#define gpuErrchk(ans)
+#endif
+
+#define ceildiv(x, y) (((x) + (y)-1) / (y))
 
 template <bool Transpose>
 __global__ void sparse_gemm_float_kernel(
@@ -62,11 +81,14 @@ void sparse_gemm_float(const float* A, const float* B, const uint2* lut,
                        int64_t K, sparse_mm_params* params) {
   dim3 threads(1);
   int64_t x = params->num_segs;
-  int64_t y = N / params->block_size;
+  int64_t y = ceildiv(N, params->block_size);
   dim3 blocks(x, y);
   size_t shared = params->block_size * params->block_size * sizeof(float);
-  sparse_gemm_float_kernel<false><<<blocks, threads, shared>>>(
+
+  gpuErrchk(cudaPeekAtLastError());
+  sparse_gemm_float_kernel<false><<<blocks, threads, shared /*, stream*/>>>(
       A, B, (const uint2*)lut, gate, C, N, M, K, params->block_size);
+  gpuErrchk(cudaPeekAtLastError());
 }
 
 void sparse_gemm_float_t(const float* A, const float* B_t, const uint2* lut_t,
@@ -74,11 +96,13 @@ void sparse_gemm_float_t(const float* A, const float* B_t, const uint2* lut_t,
                          int64_t K, sparse_mm_params* params) {
   dim3 threads(1);
   int64_t x = params->num_segs;
-  int64_t y = N / params->block_size;
+  int64_t y = ceildiv(N, params->block_size);
   dim3 blocks(x, y);
   size_t shared = params->block_size * params->block_size * sizeof(float);
+  gpuErrchk(cudaPeekAtLastError());
   sparse_gemm_float_kernel<true><<<blocks, threads, shared>>>(
       A, B_t, (const uint2*)lut_t, gate, C, N, M, K, params->block_size);
+  gpuErrchk(cudaPeekAtLastError());
 }
 
 __global__ void gemm_float_to_sparse_kernel(
@@ -129,6 +153,9 @@ void gemm_float_to_sparse(const float* X, const float* dY,
   int64_t x = params->num_blocks;
   dim3 blocks(x);
   size_t shared = params->block_size * params->block_size * sizeof(float);
-  gemm_float_to_sparse_kernel<<<blocks, threads, shared>>>(
+
+  gpuErrchk(cudaPeekAtLastError());
+  gemm_float_to_sparse_kernel<<<blocks, threads, shared /*, stream*/>>>(
       X, dY, (const uint2*)updat_lut, gate, dW, N, M, K, params->block_size);
+  gpuErrchk(cudaPeekAtLastError());
 }

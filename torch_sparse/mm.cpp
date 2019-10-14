@@ -1,6 +1,8 @@
 #include "mm.h"
 #include <ATen/core/op_registration/op_registration.h>
 #include "ATen/ATen.h"
+#include "c10/cuda/CUDAGuard.h"
+#include "torch/csrc/autograd/record_function.h"
 
 using namespace at;
 
@@ -12,6 +14,10 @@ static auto registry0 =
                 [](at::Tensor X, at::Tensor W, int64_t out, at::Tensor lut,
                    int64_t block_size, int64_t num_segs,
                    int64_t max_seg_len) -> at::Tensor {
+                  at::cuda::CUDAGuard device_guard(X.device());
+                  std::vector<c10::IValue> inp{X, W, lut};
+                  RECORD_FUNCTION("sparse::bsmm", inp);
+
                   TORCH_CHECK(X.dim() == 2);
                   if (!X.is_contiguous()) {
                     // std::cerr << "non-contiguous X, likely slowdown\n";
@@ -49,6 +55,9 @@ static auto registry0 =
                    int64_t block_size, int64_t num_segs,
                    int64_t max_seg_len) -> at::Tensor {
                   TORCH_CHECK(dY.dim() == 2);
+                  at::cuda::CUDAGuard device_guard(dY.device());
+                  std::vector<c10::IValue> inp{dY, W, lut};
+                  RECORD_FUNCTION("sparse::bsmm_t", inp);
                   auto N = dY.sizes()[0];
                   auto K = dY.sizes()[1];
                   auto M = out;
@@ -87,6 +96,9 @@ static auto registry0 =
                 c10::TensorTypeId::CUDATensorId,
                 [](at::Tensor X, at::Tensor dY, at::Tensor lut,
                    int64_t block_size) -> at::Tensor {
+                  at::cuda::CUDAGuard device_guard(X.device());
+                  std::vector<c10::IValue> inp{X, dY, lut};
+                  RECORD_FUNCTION("sparse::mm_to_bs", inp);
                   if (!dY.is_contiguous()) {
                     // std::cerr << "non-contiguous dY, likely slowdown\n";
                     dY = dY.contiguous();

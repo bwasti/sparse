@@ -12,9 +12,10 @@ def bench_log(name, t, iters):
 
 # For some reason, torch.autograd.Function.apply is really slow ¯\_(ツ)_/¯
 def f(X, W):
-    o = torch.ops.sparse.bsmm(
-        X, W.data, W.shape[1], W.flut, W.block_size, W.num_fsegs, W.max_fseg
-    )
+    o = ts.mm(X, W)
+    #o = torch.ops.sparse.bsmm(
+    #    X, W.data, W.shape[1], W.flut, W.block_size, W.num_fsegs, W.max_fseg
+    #)
     return o
 
 
