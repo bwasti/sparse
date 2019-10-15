@@ -140,10 +140,8 @@ __global__ void gemm_float_to_sparse_kernel(
   }
   __syncthreads();
   // todo flatten
-  for (uint i = 0; i < blocksize; ++i) {
-    for (uint j = 0; j < blocksize; ++j) {
-      dW_block[i * blocksize + j] = dW_block_accum[i * blocksize + j];
-    }
+  for (uint i = 0; i < blocksize * blocksize; ++i) {
+    dW_block[i] = dW_block_accum[i];
   }
 }
 

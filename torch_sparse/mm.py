@@ -210,7 +210,7 @@ def mm(X, W: BlockSparseTensor, transb=False):
 
 def mm_out(X, Y, W: BlockSparseTensor):
     W.data = torch.ops.sparse.mmbs(
-        X.t(),
+        X,
         Y,
         W.ulut,
         W.flut,

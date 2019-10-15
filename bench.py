@@ -14,11 +14,13 @@ def f(X, W):
     o = ts.mm(X, W)
     return o
 
-
 def f_t(X, W):
-    o = ts.mm_raw(X, W)  # , True)
+    o = ts.mm(X, W, True)
     return o
 
+def f_raw(X, W):
+    o = ts.mm_raw(X, W)  # , True)
+    return o
 
 def b(X, Y, W):
     o = ts.mm_out(X, Y, W)
@@ -68,4 +70,5 @@ if __name__ == "__main__":
                     for s in [3, 4]:
                         bench_fwd(f, mb, i, o, bs, s)
                         bench_fwd(f_t, mb, i, o, bs, s)
+                        bench_fwd(f_raw, mb, i, o, bs, s)
                         bench_bwd(b, mb, i, o, bs, s)
