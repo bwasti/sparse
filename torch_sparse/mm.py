@@ -128,146 +128,6 @@ def compress_w(W, layout, block_size, z_map):
     return np.array(W_out)
 
 
-class BSMM(Function):
-    @staticmethod
-    def forward(
-        ctx,
-        X,
-        W,
-        flut,
-        blut,
-        ulut,
-        o_size,
-        block_size,
-        num_fsegs,
-        max_fseg,
-        num_bsegs,
-        max_bseg,
-        t,
-    ):
-        ctx.save_for_backward(X, W, flut, blut, ulut)
-        ctx.block_size = block_size
-        ctx.num_fsegs  = num_fsegs
-        ctx.max_fseg   = max_fseg
-        ctx.num_bsegs  = num_bsegs
-        ctx.max_bseg   = max_bseg
-        if t:
-            o = torch.ops.sparse.bsmm_t(
-                X, W, o_size, flut, block_size, num_fsegs, max_fseg
-            )
-        else:
-            o = torch.ops.sparse.bsmm(
-                X, W, o_size, flut, block_size, num_fsegs, max_fseg
-            )
-        return o
-
-    @staticmethod
-    def backward(ctx, dY):
-        X, W, flut, blut, ulut = ctx.saved_tensors
-        dX = None
-        if ctx.needs_input_grad[0]:
-          dX = BSMM.apply(
-              dY,
-              W,
-              blut,
-              flut,
-              ulut,
-              X.shape[1],
-              ctx.block_size,
-              ctx.num_bsegs,
-              ctx.max_bseg,
-              ctx.num_fsegs,
-              ctx.max_fseg,
-              True,
-          )
-        dW = None
-        if ctx.needs_input_grad[1]:
-          dW = BSMM_out.apply(
-              X,
-              dY,
-              ulut,
-              flut,
-              blut,
-              ctx.block_size,
-              ctx.num_fsegs,
-              ctx.max_fseg,
-              ctx.num_bsegs,
-              ctx.max_bseg,
-          )
-        return dX, dW, None, None, None, None, None, None, None, None, None, None
-
-
-class BSMM_out(Function):
-    @staticmethod
-    def forward(
-        ctx,
-        X,
-        dY,
-        ulut,
-        flut,
-        blut,
-        block_size,
-        num_fsegs,
-        max_fseg,
-        num_bsegs,
-        max_bseg,
-    ):
-        ctx.save_for_backward(
-            X,
-            dY,
-            flut,
-            blut,
-            ulut,
-        )
-        ctx.block_size   = block_size
-        ctx.num_fsegs    = num_fsegs
-        ctx.max_fseg     = max_fseg
-        ctx.num_bsegs    = num_bsegs
-        ctx.max_bseg     = max_bseg
-        dW = torch.ops.sparse.mm_to_bs(X, dY, ulut, block_size)
-        return dW
-
-    @staticmethod
-    def backward(ctx, ddW):
-        (
-            X,
-            dY,
-            flut,
-            blut,
-            ulut,
-        ) = ctx.saved_tensors
-
-        dXT = BSMM.apply(
-            dY,
-            ddW,
-            blut,
-            flut,
-            ulut,
-            X.shape[1],
-            ctx.block_size,
-            ctx.num_bsegs,
-            ctx.max_bseg,
-            ctx.num_fsegs,
-            ctx.max_fseg,
-            True,
-        )
-        ddY = BSMM.apply(
-            X,
-            ddW,
-            flut,
-            blut,
-            ulut,
-            dY.shape[1],
-            ctx.block_size,
-            ctx.num_fsegs,
-            ctx.max_fseg,
-            ctx.num_bsegs,
-            ctx.max_bseg,
-            True,
-        )
-        return dXT, ddY, None, None, None, None, None, None, None, None, None
-
-
 class BlockSparseTensor:
     def __init__(self, W, layout, max_seg=1024, min_seg=0, device=torch.device("cuda")):
         assert layout.sum() > 0
@@ -325,12 +185,14 @@ class BlockSparseTensor:
         self.ulut = torch.tensor(updat_lut, dtype=torch.int32, device=device)
 
 
-bsmm = BSMM()
-bsmm_out = BSMM_out()
+def mm_raw(X, W: BlockSparseTensor):
+    return torch.ops.sparse.bsmm_raw(
+        X, W.data, W.shape[1], W.flut, W.block_size, W.num_fsegs, W.max_fseg
+    )
 
 
-def mm(X, W: BlockSparseTensor):
-    return bsmm.apply(
+def mm(X, W: BlockSparseTensor, transb=False):
+    return torch.ops.sparse.bsmm(
         X,
         W.data,
         W.flut,
@@ -342,12 +204,12 @@ def mm(X, W: BlockSparseTensor):
         W.max_fseg,
         W.num_bsegs,
         W.max_bseg,
-        False,
+        transb,
     )
 
 
 def mm_out(X, Y, W: BlockSparseTensor):
-    W.data = bsmm_out.apply(
+    W.data = torch.ops.sparse.mmbs(
         X.t(),
         Y,
         W.ulut,
@@ -361,37 +223,39 @@ def mm_out(X, Y, W: BlockSparseTensor):
     )
     return W
 
+
 from torch.nn import init
 import math
+
 cuda = torch.device("cuda")
 
+
 class SparseLinear(torch.nn.Module):
-  def __init__(self, in_features, out_features, sparsity_or_layout, block_size):
-    super(SparseLinear, self).__init__()
-    ib = in_features // block_size
-    ob = out_features // block_size
-    if type(sparsity_or_layout) is float:
-      sparsity = sparsity_or_layout
-      numel = ib * ob
-      layout = np.zeros(numel, dtype=np.int32)
-      layout[0:int(numel * (1 - sparsity))] = 1
-      np.random.shuffle(layout)
-      layout = layout.reshape(ib, ob)
-    else:
-      layout = sparsity_or_layout
-      sparsity = layout.sum() / layout.size
+    def __init__(self, in_features, out_features, sparsity_or_layout, block_size):
+        super(SparseLinear, self).__init__()
+        ib = in_features // block_size
+        ob = out_features // block_size
+        if type(sparsity_or_layout) is float:
+            sparsity = sparsity_or_layout
+            numel = ib * ob
+            layout = np.zeros(numel, dtype=np.int32)
+            layout[0 : int(numel * (1 - sparsity))] = 1
+            np.random.shuffle(layout)
+            layout = layout.reshape(ib, ob)
+        else:
+            layout = sparsity_or_layout
+            sparsity = layout.sum() / layout.size
 
-    self.in_features = in_features
-    self.out_features = out_features
-    data = torch.nn.Parameter(torch.Tensor(in_features, out_features))
-    init.kaiming_uniform_(data, a=math.sqrt(5))
-    self.W = BlockSparseTensor(data, layout)
+        self.in_features = in_features
+        self.out_features = out_features
+        data = torch.nn.Parameter(torch.Tensor(in_features, out_features))
+        init.kaiming_uniform_(data, a=math.sqrt(5))
+        self.W = BlockSparseTensor(data, layout)
 
-  def forward(self, input):
-    return mm(input, self.W)
+    def forward(self, input):
+        return mm(input, self.W)
 
-  def reset_parameters(self):
-    data = torch.nn.Parameter(torch.Tensor(self.in_features, self.out_features))
-    init.kaiming_uniform_(data, a=math.sqrt(5))
-    self.W = BlockSparseTensor(data, layout)
-
+    def reset_parameters(self):
+        data = torch.nn.Parameter(torch.Tensor(self.in_features, self.out_features))
+        init.kaiming_uniform_(data, a=math.sqrt(5))
+        self.W = BlockSparseTensor(data, layout)
