@@ -39,7 +39,7 @@ class TestBlockSparseTensor(unittest.TestCase):
     def test_ident(self):
         X = torch.randn(128, 128, device=cuda)
         W = torch.eye(128, device=cuda)
-        bs_W = ts.BlockSparseTensor(W, torch.ones(8, 8))
+        bs_W = ts.createBlockSparseTensor(W, torch.ones(8, 8))
         Y = ts.mm(X, bs_W)
         torch.testing.assert_allclose(X, Y)
 

@@ -37,7 +37,7 @@ def get_rand_vals(mb_size, i_size, o_size, block_size, return_mask=False, sparsi
     W = torch.randn(i_size, o_size, device=cuda)
     mask = get_mask(layout, block_size)
     masked_W = W * mask
-    bs_W = ts.BlockSparseTensor(W, layout)
+    bs_W = ts.createBlockSparseTensor(W, layout)
     if return_mask:
         return X, masked_W, bs_W, mask
     return X, masked_W, bs_W

@@ -127,62 +127,86 @@ def compress_w(W, layout, block_size, z_map):
                 W_out[z_map[(k, c)]] = block.cpu().numpy()
     return np.array(W_out)
 
+@torch.jit.script
+class LUT:
+    def __init__(self, num_seg, max_seg, data):
+        self.num_seg = num_seg
+        self.max_seg = max_seg
+        self.data = data
 
+@torch.jit.script
 class BlockSparseTensor:
-    def __init__(self, W, layout, max_seg=1024, min_seg=0, device=torch.device("cuda")):
-        assert layout.sum() > 0
+    def __init__(self, data, shape, block_size : int, flut : LUT, blut : LUT, ulut):
+        self.data = data
+        self.shape = shape
+        self.block_size = block_size
+        self.flut = flut 
+        self.blut = blut 
+        self.ulut = ulut 
 
-        # track original dimensions
-        self.shape = W.shape
-        assert len(W.shape) == len(layout.shape)
+def createBlockSparseTensor(W, layout, max_seg=1024, min_seg=0, device=torch.device("cuda")):
+    assert layout.sum() > 0
 
-        # save block size
-        self.block_size = W.shape[0] // layout.shape[0]
-        assert self.block_size <= 128
-        assert W.shape[0] % layout.shape[0] == 0
-        assert W.shape[1] % layout.shape[1] == 0
-        assert W.shape[1] // layout.shape[1] == self.block_size
+    # track original dimensions
+    shape = W.shape
+    assert len(W.shape) == len(layout.shape)
 
-        cs, ks, vs, updat_lut = create_sparse_ckv(layout)
-        idx = range(len(vs))
-        idxT = sorted(idx, key=lambda i: cs[i])
-        zmap = dict()
-        for c, k, v in zip(cs, ks, vs):
-            zmap[(int(k), int(c))] = int(v)
-        num_blocks = len(vs)
+    # save block size
+    block_size = W.shape[0] // layout.shape[0]
+    assert block_size <= 128
+    assert W.shape[0] % layout.shape[0] == 0
+    assert W.shape[1] % layout.shape[1] == 0
+    assert W.shape[1] // layout.shape[1] == block_size
 
-        # actual tensor data
-        self.data = torch.tensor(
-            compress_w(W.detach(), layout, self.block_size, zmap),
-            dtype=torch.float,
-            device=device,
-        )
-        self.data.requires_grad = W.requires_grad
+    cs, ks, vs, updat_lut = create_sparse_ckv(layout)
+    idx = range(len(vs))
+    # sorted(idx, key=lambda i: cs[i]) unsuppored by JIT
+    zippedidxT = [(cs[i], i) for i in idx]
+    zippedidxT = sorted(zippedidxT)
+    idxT = [i for _, i in zippedidxT]
+    #idxT = sorted(idx, key=lambda i: cs[i])# unsuppored by JIT
+    zmap = dict()
+    for c, k, v in zip(cs, ks, vs):
+        zmap[(int(k), int(c))] = int(v)
+    num_blocks = len(vs)
 
-        # forward prop lookup table
-        fsegs, f_lockids = create_seg_list(
-            layout.shape[1], cs, ks, vs, idx, max_seg, min_seg
-        )
-        max_fseg_len = max([len(fseg[1]) for fseg in fsegs])
-        flut = create_lut(fsegs, f_lockids, num_blocks)
+    # actual tensor data
+    data = torch.tensor(
+        compress_w(W.detach(), layout, block_size, zmap),
+        dtype=torch.float,
+        device=device,
+    )
+    data.requires_grad = W.requires_grad
 
-        self.num_fsegs = len(fsegs)
-        self.max_fseg = max_fseg_len
-        self.flut = torch.tensor(flut, dtype=torch.int32, device=device)
+    # forward prop lookup table
+    fsegs, f_lockids = create_seg_list(
+        layout.shape[1], cs, ks, vs, idx, max_seg, min_seg
+    )
+    max_fseg_len = max([len(fseg[1]) for fseg in fsegs])
+    flut = create_lut(fsegs, f_lockids, num_blocks)
 
-        # backprop (dX) lookup table
-        bsegs, b_lockids = create_seg_list(
-            layout.shape[0], ks, cs, vs, idxT, max_seg, min_seg
-        )
-        max_bseg_len = max([len(bseg[1]) for bseg in bsegs])
-        blut = create_lut(bsegs, b_lockids, num_blocks)
+    num_fsegs = len(fsegs)
+    max_fseg = max_fseg_len
+    flut = LUT(num_fsegs, max_fseg, torch.tensor(flut, dtype=torch.int32, device=device))
 
-        self.num_bsegs = len(bsegs)
-        self.max_bseg = max_bseg_len
-        self.blut = torch.tensor(blut, dtype=torch.int32, device=device)
+    # backprop (dX) lookup table
+    bsegs, b_lockids = create_seg_list(
+        layout.shape[0], ks, cs, vs, idxT, max_seg, min_seg
+    )
+    max_bseg_len = max([len(bseg[1]) for bseg in bsegs])
+    blut = create_lut(bsegs, b_lockids, num_blocks)
 
-        # backprop/update (dW) lookup table
-        self.ulut = torch.tensor(updat_lut, dtype=torch.int32, device=device)
+    num_bsegs = len(bsegs)
+    max_bseg = max_bseg_len
+    blut = LUT(num_bsegs, max_bseg, torch.tensor(blut, dtype=torch.int32, device=device))
+
+    # backprop/update (dW) lookup table
+    ulut = torch.tensor(updat_lut, dtype=torch.int32, device=device)
+
+    return BlockSparseTensor(data, shape, block_size, flut, blut, ulut)
+    
+#class BlockSparseTensor_:
+#    def __init__(self, W, layout, max_seg=1024, min_seg=0, device=torch.device("cuda")):
 
 
 def mm_raw(X, W: BlockSparseTensor):
@@ -195,31 +219,31 @@ def mm(X, W: BlockSparseTensor, transb=False):
     return torch.ops.sparse.bsmm(
         X,
         W.data,
-        W.flut,
-        W.blut,
+        W.flut.data,
+        W.blut.data,
         W.ulut,
         W.shape[1],
         W.block_size,
-        W.num_fsegs,
-        W.max_fseg,
-        W.num_bsegs,
-        W.max_bseg,
+        W.flut.num_seg,
+        W.flut.max_seg,
+        W.blut.num_seg,
+        W.blut.max_seg,
         transb,
     )
 
 
 def mm_out(X, Y, W: BlockSparseTensor):
     W.data = torch.ops.sparse.mmbs(
-        X,
+        X.t(),
         Y,
         W.ulut,
-        W.flut,
-        W.blut,
+        W.flut.data,
+        W.blut.data,
         W.block_size,
-        W.num_fsegs,
-        W.max_fseg,
-        W.num_bsegs,
-        W.max_bseg,
+        W.flut.num_seg,
+        W.flut.max_seg,
+        W.blut.num_seg,
+        W.blut.max_seg,
     )
     return W
 
@@ -248,14 +272,17 @@ class SparseLinear(torch.nn.Module):
 
         self.in_features = in_features
         self.out_features = out_features
-        data = torch.nn.Parameter(torch.Tensor(in_features, out_features))
-        init.kaiming_uniform_(data, a=math.sqrt(5))
-        self.W = BlockSparseTensor(data, layout)
+        self.W = None
+        self.reset_parameters()
+        #data = torch.nn.Parameter(torch.Tensor(in_features, out_features))
+        #init.kaiming_uniform_(data, a=math.sqrt(5))
+        #self.W = createBlockSparseTensor(data, layout)
 
     def forward(self, input):
         return mm(input, self.W)
 
+    @torch.jit.unused
     def reset_parameters(self):
         data = torch.nn.Parameter(torch.Tensor(self.in_features, self.out_features))
         init.kaiming_uniform_(data, a=math.sqrt(5))
-        self.W = BlockSparseTensor(data, layout)
+        self.W = createBlockSparseTensor(data, layout)
