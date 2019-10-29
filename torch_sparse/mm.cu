@@ -1,5 +1,5 @@
 #include "c10/cuda/CUDAStream.h"
-#include "mm.h"
+#include "mm_cuda.h"
 #include <stdio.h>
 
 #ifdef DEBUG

@@ -1,4 +1,4 @@
-#include "mm.h"
+#include "mm_cuda.h"
 #include "ATen/ATen.h"
 #include "c10/cuda/CUDAGuard.h"
 #include "torch/csrc/autograd/custom_function.h"
